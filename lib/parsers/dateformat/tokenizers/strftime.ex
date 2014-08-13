@@ -3,6 +3,8 @@ defmodule Timex.Parsers.DateFormat.Tokenizers.Strftime do
   Responsible for tokenizing date/time format strings
   which use the strftime formatter.
   """
+  use Timex.Parsers.DateFormat.Tokenizers.Tokenizer
+  
   alias Timex.Parsers.DateFormat.ParserState, as: State
   alias Timex.Parsers.DateFormat.Directive,   as: Directive
 
