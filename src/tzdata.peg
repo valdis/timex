@@ -1,0 +1,395 @@
+%% -------------------------------------------------------------------
+%%
+%% tzdata: Parser for the Olson timezone database.
+%%
+%% Copyright (c) 2014 Paul Schoenfelder.  All Rights Reserved.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
+
+%% Parses each line, and removes invalid lines (those with just comments or whitespace)
+tzdata <- line* %{
+    [ L || L <- Node, is_valid(L) ]
+%};
+
+%% Lines are rules, links, zones, leaps, comments, or 
+%% horizontal whitespace, terminated by an end-of-line or end-of-file.
+line <- ((rule / link / zone / leap / comment / ws*) (comment / ws*) (crlf / eof)) / crlf %{
+    case Node of
+        [{rule,_,_,_,_,_,_,_,_}=Rule, _, _] -> Rule;
+        [{link,_,_}=Link, _, _]             -> Link;
+        [{zone,_,_}=Zone, _, _]             -> Zone;
+        [{leap,_,_,_}=Leap, _, _]           -> Leap;
+        [ _Line, _EOL ]                     -> ignore;
+        _Line                               -> ignore
+    end
+%};
+
+%% Defines a rule for changing from standard time to daylight savings time
+rule <- !((ws* crlf) / comment) "Rule" ws+ word ws+ year_range ws+ type ws+ month ws+ on ws+ at ws+ save ws+ letter %{
+    [_, _, _, String, _, YearRange, _, Type, _, Month, _, On, _, At, _, Save, _, Letter] = Node,
+    {rule, String, YearRange, Type, Month, On, At, Save, Letter}
+%};
+
+%% Defines a rule which states that the first zone uses
+%% the zone rules from the second zone. e.g.:
+%%
+%%   Link America/Chicago America/New York
+%%
+%% This would be the same as saying, when working with the
+%% America/Chicago timezone, use America/New York's zone rules.
+link <- !((ws* crlf) / comment) "Link" ws+ word ws+ word %{
+    [_, _, _, LinkedZone, _, LinkingZone] = Node,
+    {link, LinkedZone, LinkingZone} 
+%};
+
+%% Defines a zone rule
+zone <- !((ws* crlf) / comment) "Zone" ws+ word ws+ zone_lines %{
+    [_, _, _, String, _, ZoneLines] = Node,
+    {zone, String, ZoneLines}
+%};
+
+%% Defines a leap rule
+leap <- !((ws* crlf) / comment) "Leap" ws+ year ws+ month ws+ day ws+ time ws+ correction ws+ leap_type %{
+    [_, _, _, Year, _, Month, _, Day, _, Time, _, Corr, _, LeapType] = Node,
+    {leap, {{Year, Month, Day}, Time}, Corr, LeapType}
+%};
+
+%% Parses zone rules for a specific zone. The format is rather complex, see
+%% http://www.cstdbill.com/tzdb/tz-how-to.html for more information.
+zone_lines <- ((offset ws+ rules ws+ format ws+ until (comment / ws*) crlf ws* (((comment ws* crlf ws*)+ zone_lines) / zone_lines)) /
+               (offset ws+ rules ws+ format (comment / ws*))) %{
+    case Node of
+        [[[comment|_]|_], ZoneLines] ->
+            ZoneLines;
+        [Offset, _, Rules, _, Format, _] ->
+            [{Offset, Rules, Format, parse_until()}];
+        [Offset, _, Rules, _, Format, _, Until, _, _, _, [[[comment|_]|_], ZoneLines], _] ->
+            [{Offset, Rules, Format, Until} | ZoneLines];
+        [Offset, _, Rules, _, Format, _, Until, _, _, _, ZoneLines] ->
+            [{Offset, Rules, Format, Until} | ZoneLines]
+    end
+%};
+
+%% The day of the month on which this rule takes effect
+%% Can either be a day number, or a day spec such as Sun>=8,
+%% for "the first Sunday on or after the 8th of the month"
+on <- ((weekday comparison number) / day) %{
+    case Node of
+        [Weekday, Comp, Num] -> {Comp, Weekday, Num};
+        {last, _}            -> Node;
+        _Default             -> Node
+    end
+%};
+
+%% A variable date format for the date at which this zone ends and the next begins
+until <- ((year ws+ month ws+ weekday comparison number ws+ time at_type) / 
+          (year ws+ month ws+ weekday comparison number ws+ time) / 
+          (year ws+ month ws+ day ws+ time at_type) /
+          (year ws+ month ws+ day ws+ time) /
+          (year ws+ month ws+ weekday comparison number) /
+          (year ws+ month ws+ day) /
+          (year ws+ month) /
+           year)* %{
+    case Node of
+        []      -> parse_until();
+        [Until] -> parse_until(Until)
+    end
+%};
+
+%% The name of a zone rule
+rules <- ("-" / time / word) %{
+    case Node of
+        <<$->>    -> nil;
+        {_, _, _} -> Node;
+        _Default  -> Node
+    end
+%};
+
+%% The format of the timezone abbreviation.
+%% For variable timezones, {Before, After} is returned, 
+%% the variable letter is expected to be concatented between those two values.
+%% For everything else, a single string is returned, or nil, which acts as a no-op
+format <- ("zzz" / word) %{
+    Format = binary_to_list(Node),
+    case Format of
+        "zzz" ->
+            nil;
+        _Other ->
+            case string:tokens(Format, "%s") of
+                []              -> { <<>>, <<>> };
+                [Name]          -> list_to_binary(Name);
+                [Before, After] -> { list_to_binary(Before), list_to_binary(After) }
+            end
+    end
+%};
+
+%% The time at which this zone takes effect
+at <- ((time at_type) / "0" / word) %{
+    case Node of
+        <<$0>> ->
+            { local, { 0, 0, 0 } };
+        [{Hour, Minute, Second}, AtType] ->
+            {AtType, {Hour, Minute, Second}};
+        Anything ->
+            list_to_binary(Anything)
+    end
+%};
+
+%% The timezone at which this time takes effect
+at_type <- ("w" / "u" / "s" / "g" / "z")* %{
+    case Node of
+        [] -> local;
+        [AtType] ->
+            case binary_to_list(AtType) of
+                ""  -> local;
+                "w" -> local;
+                "u" -> universal;
+                "s" -> standard;
+                "g" -> greenwich;
+                "z" -> nautical
+            end
+    end
+%};
+
+%% An alias for offset
+save <- offset;
+
+%% One of the following offset formats:
+%%   - Any time format prefixed with an optional "-" for negative offsets
+%%   - 0 for no offset
+%%   - 1 for an offset of +1 hour
+offset <- (("-"? time) / "0" / "1") %{
+    case Node of
+        [<<$->>, {Hour, Minutes, Seconds}] -> { '-', { Hour, Minutes, Seconds } };
+        [_, {Hour, Minutes, Seconds}]      -> { '+', { Hour, Minutes, Seconds } };
+        <<$0>>                             -> { '+', { 0, 0, 0 } };
+        <<$1>>                             -> { '+', { 1, 0, 0 } }
+    end
+%};
+
+%% Indicates the variable part of a timezone abbreviation. "-" means there isn't one.
+letter <- ("S" / "DD" / "D" / "W" / "P" / "-" / word) %{
+    case binary_to_list(Node) of
+        "S"  -> standard;
+        "D"  -> daylight_saving;
+        "DD" -> daylight_saving;
+        "W"  -> war;
+        "P"  -> peace;
+        "-"  -> none;
+        _L   -> none
+    end
+%};
+
+%% Expected to be formatted like one of the following pairs:
+%%   - {2010,  2014}   # Applies only to years between 2010 and 2014
+%%   - {2010,  "only"} # Applies only in 2010
+%%   - {2010,  "max"}  # Applies to years between 2010 and the present
+%%   - {"min", "only"} # Applies only in the first year of this zone
+%%   - {"min", "max"}  # Applies to every year of this zone up to the present
+%%   - {"min", 2014}   # Applies to every year of this zone up to 2014
+year_range <- ("min" / year) ws+ ("only" / "max" / year) %{
+    [From, _, To] = Node,
+    case {From, To} of
+        {_, <<"only">>} ->
+            From;
+        {_, <<"max">>} ->
+            { From, infinity };
+        {<<"min">>, _} ->
+            { infinity, To };
+        {_, _} ->
+            { From, To }
+    end
+%};
+
+%% Expected to be a 4 digit year, e.g. 2014
+year <- digit+ %{
+    binary_to_integer(iolist_to_binary(Node))
+%};
+
+%% Self explanatory
+month <- ("Jan" / "Feb" / "Mar" / "Apr" / "May" / "Jun" / 
+          "Jul" / "Aug" / "Sep" / "Oct" / "Nov" / "Dec") %{
+    case binary_to_list(Node) of
+        "Jan" -> 1;
+        "Feb" -> 2;
+        "Mar" -> 3;
+        "Apr" -> 4;
+        "May" -> 5;
+        "Jun" -> 6;
+        "Jul" -> 7;
+        "Aug" -> 8;
+        "Sep" -> 9;
+        "Oct" -> 10;
+        "Nov" -> 11;
+        "Dec" -> 12
+    end
+%};
+
+%% Self explanatory
+weekday <- ("Mon" / "Tue" / "Wed" / "Thu" / "Fri" / "Sat" / "Sun") %{
+    case binary_to_list(Node) of
+        "Mon" -> 1;
+        "Tue" -> 2;
+        "Wed" -> 3;
+        "Thu" -> 4;
+        "Fri" -> 5;
+        "Sat" -> 6;
+        "Sun" -> 7
+    end
+%};
+
+%% Is expected to be in the form of "lastSat", "lastSun", or a day number
+day <- word %{
+    Day = binary_to_list(Node),
+    case Day of
+        "lastSat" -> { last, saturday };
+        "lastSun" -> { last, sunday };
+        _Default ->
+            case string:to_integer(Day) of
+                { error, _ } ->
+                    list_to_binary(Day);
+                { Result, _ } ->
+                    Result
+            end
+    end
+%};
+
+%% H:M:S or H:M or H will all return {H, M, S} where 
+%% default value is 0 for unprovided portions of the time
+time <- ((hour ":" minute ":" second) / (hour ":" minute) / hour) %{
+    case Node of
+        [Hour, _, Min, _, Sec] ->
+            {Hour, Min, Sec};
+        [Hour, _, Min] ->
+            {Hour, Min, 0};
+        Hour ->
+            {Hour, 0, 0}
+    end
+%};
+
+%% Used for determining the type of offset (positive/negative)
+correction <- ("+" / "-");
+
+%% Used in combination with a weekday and number, e.g. Sun>=1
+comparison <- (">=" / "<=" / ">" / "<") %{
+    list_to_atom(binary_to_list(Node))
+%};
+
+%% Whether this leap type is in local time (rolling) or UTC (stationary)
+leap_type <- ("S" / "R") %{
+    case Node of
+        <<$S>> -> stationary;
+        <<$R>> -> rolling
+    end
+%};
+
+type <- "-" %{
+    nil
+%};
+
+%% A number is any digit 0-9 repeated at least once
+number <- digit+ %{
+    binary_to_integer(iolist_to_binary(Node))
+%};
+
+hour   <- double_digit;
+minute <- double_digit;
+second <- double_digit;
+
+double_digit <- (digit digit) / digit %{
+    case Node of 
+        [_Tens, _Ones] -> list_to_integer(Node);
+        Ones           -> list_to_integer([Ones])
+    end
+%};
+digit <- [0-9] %{
+    [Digit] = binary_to_list(Node),
+    Digit
+%};
+
+%% A word is one or more of letters, numbers and dashes or
+%% underscores.
+word <- [-+_:a-zA-Z0-9%/]+ %{
+    iolist_to_binary(Node)
+%};
+
+%% A comment is any line that begins with a # sign, leading whitespace allowed.
+comment <- ws* "#" (!crlf .)* `comment`;
+%% An end-of-line is signified by a line-feed with an optional preceding carriage-return.
+crlf <- "\r"? "\n" `ws`;
+%% The end-of-file is where no character matches.
+eof <- !. `ws`;
+%% Whitespace is either spaces or tabs.
+ws <- [\t\s] `ws`;
+
+%% Erlang code
+%{
+%% -------------------------------------------------------------------
+%%
+%% tzdata: Parser for the Olson timezone database.
+%%
+%% Copyright (c) 2014 Paul Schoenfelder.  All Rights Reserved.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
+-define(line, true).
+-define(FMT(F,A), lists:flatten(io_lib:format(F,A))).
+
+parse_until([Year, _, Month, _, WeekDay, Comp, Number, _, Time, Type]) ->
+    { Type, { {Year, Month, { WeekDay, Comp, Number }}, Time }};
+parse_until([Year, _, Month, _, WeekDay, Comp, Number, _, Time]) ->
+    { local, { {Year, Month, { WeekDay, Comp, Number }}, Time }};
+parse_until([Year, _, Month, _, Day, Time, Type]) when is_atom(Type)->
+    { Type, { {Year, Month, Day }, Time }};
+parse_until([Year, _, Month, _, WeekDay, Comp, Number]) when is_atom(Comp) ->
+    { local, { {Year, Month, { WeekDay, Comp, Number }}, {0,0,0} }};
+parse_until([Year, _, Month, _, Day, _, Time]) ->
+    Type = [lists:last(Time)],
+    case string:to_integer(Type) of
+        { error, _ } ->
+            parse_until([Year, Month, Day, lists:reverse(tl(lists:reverse(Time))), Type]);
+        _Default ->
+            parse_until([Year, Month, Day, Time, ""])
+    end;
+parse_until([Year, _, Month, _, Day]) ->
+    { local, { {Year, Month, Day}, {0,0,0} }};
+parse_until([Year, _, Month]) ->
+    { local, { {Year, Month, 1}, {0,0,0} }};
+parse_until(Year) ->
+    { local, { {Year,1,1}, {0,0,0} }}.
+
+parse_until() ->
+    infinity.
+
+%% @doc Only let through lines that are not comments or whitespace.
+is_valid(ignore)  -> false;
+is_valid(_)       -> true.
+
+%}
