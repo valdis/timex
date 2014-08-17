@@ -67,6 +67,16 @@ parse_until() ->
 is_valid(ignore)  -> false;
 is_valid(_)       -> true.
 
+strip_comments(ZoneChanges) ->
+    strip_comments(ZoneChanges, []).
+
+strip_comments([], Acc) ->
+    Acc;
+strip_comments([[[comment|_]|_] | Rest], Acc) ->
+    strip_comments(Rest, Acc);
+strip_comments([H|Rest], Acc) ->
+    strip_comments(Rest, [H|Acc]).
+
 
 -spec file(file:name()) -> any().
 file(Filename) -> case file:read_file(Filename) of {ok,Bin} -> parse(Bin); Err -> Err end.
@@ -103,22 +113,22 @@ parse(Input) when is_binary(Input) ->
 -spec 'rule'(input(), index()) -> parse_result().
 'rule'(Input, Index) ->
   p(Input, Index, 'rule', fun(I,D) -> (p_seq([p_not(p_choose([p_seq([p_zero_or_more(fun 'ws'/2), fun 'crlf'/2]), fun 'comment'/2])), p_string(<<"Rule">>), p_one_or_more(fun 'ws'/2), fun 'word'/2, p_one_or_more(fun 'ws'/2), fun 'year_range'/2, p_one_or_more(fun 'ws'/2), fun 'type'/2, p_one_or_more(fun 'ws'/2), fun 'month'/2, p_one_or_more(fun 'ws'/2), fun 'on'/2, p_one_or_more(fun 'ws'/2), fun 'at'/2, p_one_or_more(fun 'ws'/2), fun 'save'/2, p_one_or_more(fun 'ws'/2), fun 'letter'/2]))(I,D) end, fun(Node, _Idx) ->
-    [_, _, _, String, _, YearRange, _, Type, _, Month, _, On, _, At, _, Save, _, Letter] = Node,
-    {rule, String, YearRange, Type, Month, On, At, Save, Letter}
+    [_, _, _, Name, _, YearRange, _, Type, _, Month, _, On, _, At, _, Save, _, Letter] = Node,
+    {rule, Name, YearRange, Type, Month, On, At, Save, Letter}
  end).
 
 -spec 'link'(input(), index()) -> parse_result().
 'link'(Input, Index) ->
   p(Input, Index, 'link', fun(I,D) -> (p_seq([p_not(p_choose([p_seq([p_zero_or_more(fun 'ws'/2), fun 'crlf'/2]), fun 'comment'/2])), p_string(<<"Link">>), p_one_or_more(fun 'ws'/2), fun 'word'/2, p_one_or_more(fun 'ws'/2), fun 'word'/2]))(I,D) end, fun(Node, _Idx) ->
-    [_, _, _, LinkedZone, _, LinkingZone] = Node,
-    {link, LinkedZone, LinkingZone} 
+    [_, _, _, FromZone, _, ToZone] = Node,
+    {link, FromZone, ToZone} 
  end).
 
 -spec 'zone'(input(), index()) -> parse_result().
 'zone'(Input, Index) ->
-  p(Input, Index, 'zone', fun(I,D) -> (p_seq([p_not(p_choose([p_seq([p_zero_or_more(fun 'ws'/2), fun 'crlf'/2]), fun 'comment'/2])), p_string(<<"Zone">>), p_one_or_more(fun 'ws'/2), fun 'word'/2, p_one_or_more(fun 'ws'/2), fun 'zone_lines'/2]))(I,D) end, fun(Node, _Idx) ->
-    [_, _, _, String, _, ZoneLines] = Node,
-    {zone, String, ZoneLines}
+  p(Input, Index, 'zone', fun(I,D) -> (p_seq([p_not(p_choose([p_seq([p_zero_or_more(fun 'ws'/2), fun 'crlf'/2]), fun 'comment'/2])), p_string(<<"Zone">>), p_one_or_more(fun 'ws'/2), fun 'word'/2, p_one_or_more(fun 'ws'/2), fun 'zone_changes'/2]))(I,D) end, fun(Node, _Idx) ->
+    [_, _, _, Name, _, ZoneChanges] = Node,
+    {zone, Name, ZoneChanges}
  end).
 
 -spec 'leap'(input(), index()) -> parse_result().
@@ -128,18 +138,18 @@ parse(Input) when is_binary(Input) ->
     {leap, {{Year, Month, Day}, Time}, Corr, LeapType}
  end).
 
--spec 'zone_lines'(input(), index()) -> parse_result().
-'zone_lines'(Input, Index) ->
-  p(Input, Index, 'zone_lines', fun(I,D) -> (p_choose([p_seq([fun 'offset'/2, p_one_or_more(fun 'ws'/2), fun 'rules'/2, p_one_or_more(fun 'ws'/2), fun 'format'/2, p_one_or_more(fun 'ws'/2), fun 'until'/2, p_choose([fun 'comment'/2, p_zero_or_more(fun 'ws'/2)]), fun 'crlf'/2, p_zero_or_more(fun 'ws'/2), p_choose([p_seq([p_one_or_more(p_seq([fun 'comment'/2, p_zero_or_more(fun 'ws'/2), fun 'crlf'/2, p_zero_or_more(fun 'ws'/2)])), fun 'zone_lines'/2]), fun 'zone_lines'/2])]), p_seq([fun 'offset'/2, p_one_or_more(fun 'ws'/2), fun 'rules'/2, p_one_or_more(fun 'ws'/2), fun 'format'/2, p_choose([fun 'comment'/2, p_zero_or_more(fun 'ws'/2)])])]))(I,D) end, fun(Node, _Idx) ->
+-spec 'zone_changes'(input(), index()) -> parse_result().
+'zone_changes'(Input, Index) ->
+  p(Input, Index, 'zone_changes', fun(I,D) -> (p_choose([p_seq([fun 'offset'/2, p_one_or_more(fun 'ws'/2), fun 'rules'/2, p_one_or_more(fun 'ws'/2), fun 'format'/2, p_one_or_more(fun 'ws'/2), fun 'until'/2, p_choose([fun 'comment'/2, p_zero_or_more(fun 'ws'/2)]), fun 'crlf'/2, p_zero_or_more(fun 'ws'/2), p_choose([p_seq([p_one_or_more(p_seq([fun 'comment'/2, p_zero_or_more(fun 'ws'/2), fun 'crlf'/2, p_zero_or_more(fun 'ws'/2)])), fun 'zone_changes'/2]), fun 'zone_changes'/2])]), p_seq([fun 'offset'/2, p_one_or_more(fun 'ws'/2), fun 'rules'/2, p_one_or_more(fun 'ws'/2), fun 'format'/2, p_choose([fun 'comment'/2, p_zero_or_more(fun 'ws'/2)])])]))(I,D) end, fun(Node, _Idx) ->
     case Node of
-        [[[comment|_]|_], ZoneLines] ->
-            ZoneLines;
         [Offset, _, Rules, _, Format, _] ->
             [{Offset, Rules, Format, parse_until()}];
-        [Offset, _, Rules, _, Format, _, Until, _, _, _, [[[comment|_]|_], ZoneLines], _] ->
-            [{Offset, Rules, Format, Until} | ZoneLines];
-        [Offset, _, Rules, _, Format, _, Until, _, _, _, ZoneLines] ->
-            [{Offset, Rules, Format, Until} | ZoneLines]
+        [Offset, _, Rules, _, Format, _, Until, _, _, _, [[[comment|_]|_], ZoneChanges]] ->
+            CommentsStripped = strip_comments(ZoneChanges),
+            [{Offset, Rules, Format, Until} | CommentsStripped];
+        [Offset, _, Rules, _, Format, _, Until, _, _, _, ZoneChanges] ->
+            CommentsStripped = strip_comments(ZoneChanges),
+            [{Offset, Rules, Format, Until} | CommentsStripped]
     end
  end).
 
@@ -253,11 +263,11 @@ parse(Input) when is_binary(Input) ->
     [From, _, To] = Node,
     case {From, To} of
         {_, <<"only">>} ->
-            From;
+            { From, only };
         {_, <<"max">>} ->
-            { From, infinity };
+            { From, max };
         {<<"min">>, _} ->
-            { infinity, To };
+            { min, To };
         {_, _} ->
             { From, To }
     end

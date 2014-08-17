@@ -21,6 +21,7 @@
 %% -------------------------------------------------------------------
 
 %% Parses each line, and removes invalid lines (those with just comments or whitespace)
+%% See http://www.cstdbill.com/tzdb/tz-how-to.html for more information about the format.
 tzdata <- line* %{
     [ L || L <- Node, is_valid(L) ]
 %};
@@ -40,8 +41,8 @@ line <- ((rule / link / zone / leap / comment / ws*) (comment / ws*) (crlf / eof
 
 %% Defines a rule for changing from standard time to daylight savings time
 rule <- !((ws* crlf) / comment) "Rule" ws+ word ws+ year_range ws+ type ws+ month ws+ on ws+ at ws+ save ws+ letter %{
-    [_, _, _, String, _, YearRange, _, Type, _, Month, _, On, _, At, _, Save, _, Letter] = Node,
-    {rule, String, YearRange, Type, Month, On, At, Save, Letter}
+    [_, _, _, Name, _, YearRange, _, Type, _, Month, _, On, _, At, _, Save, _, Letter] = Node,
+    {rule, Name, YearRange, Type, Month, On, At, Save, Letter}
 %};
 
 %% Defines a rule which states that the first zone uses
@@ -52,14 +53,14 @@ rule <- !((ws* crlf) / comment) "Rule" ws+ word ws+ year_range ws+ type ws+ mont
 %% This would be the same as saying, when working with the
 %% America/Chicago timezone, use America/New York's zone rules.
 link <- !((ws* crlf) / comment) "Link" ws+ word ws+ word %{
-    [_, _, _, LinkedZone, _, LinkingZone] = Node,
-    {link, LinkedZone, LinkingZone} 
+    [_, _, _, FromZone, _, ToZone] = Node,
+    {link, FromZone, ToZone} 
 %};
 
 %% Defines a zone rule
-zone <- !((ws* crlf) / comment) "Zone" ws+ word ws+ zone_lines %{
-    [_, _, _, String, _, ZoneLines] = Node,
-    {zone, String, ZoneLines}
+zone <- !((ws* crlf) / comment) "Zone" ws+ word ws+ zone_changes %{
+    [_, _, _, Name, _, ZoneChanges] = Node,
+    {zone, Name, ZoneChanges}
 %};
 
 %% Defines a leap rule
@@ -68,19 +69,20 @@ leap <- !((ws* crlf) / comment) "Leap" ws+ year ws+ month ws+ day ws+ time ws+ c
     {leap, {{Year, Month, Day}, Time}, Corr, LeapType}
 %};
 
-%% Parses zone rules for a specific zone. The format is rather complex, see
-%% http://www.cstdbill.com/tzdb/tz-how-to.html for more information.
-zone_lines <- ((offset ws+ rules ws+ format ws+ until (comment / ws*) crlf ws* (((comment ws* crlf ws*)+ zone_lines) / zone_lines)) /
+%% Parses zone changes for a specific zone. The format is rather complex, as
+%% comments and whitespace can be freely interspersed between lines, and at the end of lines,
+%% which makes reading this particular grammar a bit of a head scratcher
+zone_changes <- ((offset ws+ rules ws+ format ws+ until (comment / ws*) crlf ws* (((comment ws* crlf ws*)+ zone_changes) / zone_changes)) /
                (offset ws+ rules ws+ format (comment / ws*))) %{
     case Node of
-        [[[comment|_]|_], ZoneLines] ->
-            ZoneLines;
         [Offset, _, Rules, _, Format, _] ->
             [{Offset, Rules, Format, parse_until()}];
-        [Offset, _, Rules, _, Format, _, Until, _, _, _, [[[comment|_]|_], ZoneLines], _] ->
-            [{Offset, Rules, Format, Until} | ZoneLines];
-        [Offset, _, Rules, _, Format, _, Until, _, _, _, ZoneLines] ->
-            [{Offset, Rules, Format, Until} | ZoneLines]
+        [Offset, _, Rules, _, Format, _, Until, _, _, _, [[[comment|_]|_], ZoneChanges]] ->
+            CommentsStripped = strip_comments(ZoneChanges),
+            [{Offset, Rules, Format, Until} | CommentsStripped];
+        [Offset, _, Rules, _, Format, _, Until, _, _, _, ZoneChanges] ->
+            CommentsStripped = strip_comments(ZoneChanges),
+            [{Offset, Rules, Format, Until} | CommentsStripped]
     end
 %};
 
@@ -205,11 +207,11 @@ year_range <- ("min" / year) ws+ ("only" / "max" / year) %{
     [From, _, To] = Node,
     case {From, To} of
         {_, <<"only">>} ->
-            From;
+            { From, only };
         {_, <<"max">>} ->
-            { From, infinity };
+            { From, max };
         {<<"min">>, _} ->
-            { infinity, To };
+            { min, To };
         {_, _} ->
             { From, To }
     end
@@ -391,5 +393,15 @@ parse_until() ->
 %% @doc Only let through lines that are not comments or whitespace.
 is_valid(ignore)  -> false;
 is_valid(_)       -> true.
+
+strip_comments(ZoneChanges) ->
+    strip_comments(ZoneChanges, []).
+
+strip_comments([], Acc) ->
+    Acc;
+strip_comments([[[comment|_]|_] | Rest], Acc) ->
+    strip_comments(Rest, Acc);
+strip_comments([H|Rest], Acc) ->
+    strip_comments(Rest, [H|Acc]).
 
 %}
