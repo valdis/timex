@@ -334,4 +334,6 @@ Timezone support is also exposed via the `Timezone`, `Timezone.Local`, and `Time
 
 ## License
 
-This software is licensed under [the MIT license](LICENSE.md).
+Timex is licensed under [the MIT license](LICENSE.md), with the exception of the tzdata parser, which is licensed under [Apache License 2.0](http://www.apache.org/licenses/LICENSE-2.0).
+
+Why the mixed licensing you ask? Firstly, Alexei's elixir-datetime project, which I forked and turned into Timex, was originally licensed under MIT, so being that I typically use MIT myself, I kept it and appended my name to the copyright notice once my contributions had outgrown Alexei's. The tzdata parser however, is something I've put a lot of effort into, and being a completely new addition to the project, I wanted to ensure that there were both no restrictions on using the parser in your own projects, and that my name would be associated with my work. Simple as that really. Ultimately, the licenses are roughly equivalent, so I don't anticipate it causing issues for anyone. I'm always open to discussing it if the need arises.
