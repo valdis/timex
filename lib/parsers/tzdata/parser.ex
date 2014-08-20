@@ -54,12 +54,12 @@ defmodule Timex.Parsers.Tzdata.Parser do
     db = %{db | :rules => [rule|rules]}
     do_parse(rest, db)
   end
-  defp do_parse([{:zone, name, zone_changes}|rest], %Database{} = db) do
-    rules = Enum.map zone_changes, fn zc ->
-      %Zone.Rule{offset: offset, rule: rule, format: format, until: until}
+  defp do_parse([{:zone, name, zone_changes}|rest], %Database{zones: zones} = db) do
+    rules = Enum.map zone_changes, fn {offset, rule, format, until} ->
+      %Zone.Rule{offset: offset, rule: rule, format: format, until: until || :infinity}
     end
     zone = %Zone{name: name, rules: rules}
-    db   = %{db | :zones = [zone|zones]}
+    db   = %{db | :zones => [zone|zones]}
     do_parse(rest, db)
   end
   defp do_parse([{:leap, {{year, month, day}, {h, m, s}}=dt, correction, type}|rest], %Database{leaps: leaps} = db) do

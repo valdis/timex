@@ -2,6 +2,8 @@ defmodule Timex.Parsers.Tzdata.Zone do
   @moduledoc """
   Defines the set of rules for a given timezone.
   """
+  alias Timex.Parsers.Tzdata.Utils
+
   @derive Access
   defstruct name: "",
             rules: []
@@ -27,8 +29,15 @@ defmodule Timex.Parsers.Tzdata.Zone do
               format: "",
               # The date and time at which this zone will end. The time is
               # given in one of the following timezones:
-              #   :local, :universal, :standard, :greenwich, :nautical
+              #   :local, :universal, :standard, :greenwich, :zulu
               until: {:local, {{0, 1, 1}, {0, 0, 0}}}
-  end
 
+    def until_to_datetime(:infinity), do: :infinity
+    def until_to_datetime({_type, {{y,m,{_,_,_}=constraint},{_,_,_}=time}}),
+      do: {Utils.resolve_constraint(y, m, constraint), time}
+    def until_to_datetime({_type, {{_,_,_},{_,_,_}} = datetime}),
+      do: datetime
+    end
+
+  end
 end
