@@ -728,27 +728,17 @@ defmodule Timex.Timezone do
   Determine what offset is required to convert a date into a target timezone
   """
   @spec diff(date :: DateTime.t, tz :: TimezoneInfo.t) :: integer
-  def diff(%DateTime{:timezone => origin} = date, %TimezoneInfo{:gmt_offset_std => dest_std} = destination) do
-    %TimezoneInfo{:gmt_offset_std => origin_std} = origin
-    # Create a copy of the date in the new time zone so we can ask about DST
-    target_date = %{date | :timezone => destination}
-    # Determine DST status of origin and target
-    origin_is_dst? = date        |> Dst.is_dst?
-    target_is_dst? = target_date |> Dst.is_dst?
-    # Get the difference, accounting for DST offsets
-    cond do
-      # Standard Time all the way
-      !origin_is_dst? and !target_is_dst? -> dest_std - origin_std
-      # Target is in DST
-      !origin_is_dst? and  target_is_dst? -> coalesce(destination) - origin_std
-      # Origin is in DST, target is not
-       origin_is_dst? and !target_is_dst? -> dest_std - coalesce(origin)
-      # DST all the way
-      true -> coalesce(destination) - coalesce(origin)
+  def diff(%DateTime{:timezone => origin} = date, %TimezoneInfo{:offset => {dest_otype, dest_offset_raw}, is_dst?: dest_is_dst?} = dest) do
+    %TimezoneInfo{:offset => {otype, offset_raw}, :is_dst? => is_dst?} = origin
+    dest_offset = case dest_otype do
+        :- -> (dest_offset_raw |> Time.to_mins) * -1
+        :+ -> (dest_offset_raw |> Time.to_mins)
     end
+    offset = case otype do
+        :- -> (offset_raw |> Time.to_mins) * -1
+        :+ -> (offset_raw |> Time.to_mins)
+    end
+    dest_offset - offset
   end
-
-  # Coalesce the standard time and daylight savings time offsets to get the proper DST offset
-  defp coalesce(%TimezoneInfo{:gmt_offset_std => std, :gmt_offset_dst => dst}), do: std + dst
 
 end
