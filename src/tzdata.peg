@@ -91,7 +91,7 @@ zone_changes <- ((offset ws+ rules ws+ format ws+ until (comment / ws*) crlf ws*
 %% for "the first Sunday on or after the 8th of the month"
 on <- ((weekday comparison number) / day) %{
     case Node of
-        [Weekday, Comp, Num] -> {Comp, Weekday, Num};
+        [Weekday, Comp, Num] -> {Weekday, Comp, Num};
         {last, _}            -> Node;
         _Default             -> Node
     end
@@ -162,7 +162,7 @@ at_type <- ("w" / "u" / "s" / "g" / "z")* %{
                 "u" -> universal;
                 "s" -> standard;
                 "g" -> greenwich;
-                "z" -> nautical
+                "z" -> zulu
             end
     end
 %};
@@ -258,6 +258,11 @@ weekday <- ("Mon" / "Tue" / "Wed" / "Thu" / "Fri" / "Sat" / "Sun") %{
 day <- word %{
     Day = binary_to_list(Node),
     case Day of
+        "lastMon" -> { last, monday };
+        "lastTue" -> { last, tuesday };
+        "lastWed" -> { last, wednesday };
+        "lastThu" -> { last, thursday };
+        "lastFri" -> { last, friday };
         "lastSat" -> { last, saturday };
         "lastSun" -> { last, sunday };
         _Default ->

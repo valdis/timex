@@ -157,7 +157,7 @@ parse(Input) when is_binary(Input) ->
 'on'(Input, Index) ->
   p(Input, Index, 'on', fun(I,D) -> (p_choose([p_seq([fun 'weekday'/2, fun 'comparison'/2, fun 'number'/2]), fun 'day'/2]))(I,D) end, fun(Node, _Idx) ->
     case Node of
-        [Weekday, Comp, Num] -> {Comp, Weekday, Num};
+        [Weekday, Comp, Num] -> {Weekday, Comp, Num};
         {last, _}            -> Node;
         _Default             -> Node
     end
@@ -223,7 +223,7 @@ parse(Input) when is_binary(Input) ->
                 "u" -> universal;
                 "s" -> standard;
                 "g" -> greenwich;
-                "z" -> nautical
+                "z" -> zulu
             end
     end
  end).
@@ -317,6 +317,11 @@ parse(Input) when is_binary(Input) ->
   p(Input, Index, 'day', fun(I,D) -> (fun 'word'/2)(I,D) end, fun(Node, _Idx) ->
     Day = binary_to_list(Node),
     case Day of
+        "lastMon" -> { last, monday };
+        "lastTue" -> { last, tuesday };
+        "lastWed" -> { last, wednesday };
+        "lastThu" -> { last, thursday };
+        "lastFri" -> { last, friday };
         "lastSat" -> { last, saturday };
         "lastSun" -> { last, sunday };
         _Default ->
