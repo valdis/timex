@@ -1,4 +1,21 @@
-defmodule Mix.Tasks.Tzdata.Update do
+defmodule Mix.Tasks.Tzdata do
+  @usage """
+  Usage: mix tzdata (clean [-f | --force] | rebuild | update)
+
+  # Print this help
+  mix tzdata
+
+  # Clean timezone data files. Only removes database by defalt.
+  # Force will remove the database **and** the Olson tzdata package.
+  mix tzdata clean [-f | --force]
+
+  # Rebuilds the database from the current Olson tzdata package.
+  mix tzdata rebuild
+
+  # First determines if there is a new Olson tzdata package, and
+  # if so, downloads it and rebuilds the database with it.
+  mix tzdata update
+  """
   @shortdoc false
   @moduledoc """
   Downloads the tzdata from the IANA website, parses it
@@ -7,6 +24,8 @@ defmodule Mix.Tasks.Tzdata.Update do
   database file is reified and compiled into function calls
   in the Timezone module, for performing timezone lookups and
   conversions.
+
+  #{@usage}
   """
   use Mix.Task
 
@@ -21,8 +40,47 @@ defmodule Mix.Tasks.Tzdata.Update do
   @tzdata_store Path.join(@tzdata_root, "raw")
   @tzdata_db    Path.join(@tzdata_root, "database.exs")
 
-  def run(_) do
-    fetch_tzdata!
+  @ignored_files [
+    "Makefile",      "README",
+    "leapseconds",   "leapseconds.awk", "leap-seconds.list",
+    "yearistype.sh", "iso3166.tab",
+    "zone1970.tab",  "zone.tab",
+    "factory"
+  ]
+
+  def run(args) do
+    case args do
+      ["clean"|flags] ->
+        warn "Cleaning timezone data!"
+        cond do
+          "-f" in flags ->
+            clean_tzdata!(true)
+            clean_database!(true)
+          "--force" in flags ->
+            clean_tzdata!(true)
+            clean_database!(true)
+          true ->
+            clean_database!(true)
+        end
+      ["rebuild"|_flags] ->
+        info "Rebuilding timezone database..."
+        case local_release do
+          :not_found ->
+            error "Cannot rebuild database. Olson tzdata sources not found!"
+            exit(:normal)
+          package_name ->
+            Path.join(@tzdata_store, package_name) |> build!
+        end
+      ["update"|_] ->
+        fetch_tzdata! |> build!
+      _ ->
+        IO.puts @usage
+    end
+  end
+
+  defp build!({:ok, from}), do: build!(from)
+  defp build!(from) do
+    {:ok, from}
     |> extract_tzdata!
     |> Stream.map(fn {_, bin} -> parse_tzdata(bin) end)
     |> Enum.reduce(%Database{}, &combine_parse_results/2)
@@ -42,7 +100,12 @@ defmodule Mix.Tasks.Tzdata.Update do
       timeout: 10_000, # ms
     ]
     # Connect to IANA ftp server
-    {:ok, client} = :ftp.open(@tzdata_host, options)
+    client = case :ftp.open(@tzdata_host, options) do
+      {:ok, client} -> client
+      {:error, reason} ->
+        error "Failed to connect to tzdata FTP: #{reason}"
+        exit(:normal)
+    end
     :ok = :ftp.user(client, 'anonymous', '')
     :ok = :ftp.type(client, :binary)
     :ok = :ftp.cd(client, @tzdata_dir)
@@ -78,40 +141,46 @@ defmodule Mix.Tasks.Tzdata.Update do
       # Download latest
       :ok = :ftp.recv(client, @tzdata_file, '#{download_path}')
       :ok = :ftp.close(client)
+      success "Download complete!"
       {:ok, download_path}
     end
-    success "Raw tzdata package is up to date!"
     {:ok, download_path}
   end
 
   # Extracts tzdata in memory, and returns a Stream of {filename, binary_data} tuples
   defp extract_tzdata!({:ok, path}) do
-    info "Extracting tzdata package to priv/tzdata/raw..."
-    {:ok, files} = :erl_tar.extract('#{path}', [{:cwd, '#{@tzdata_store}'}, :compressed, :verbose, :memory])
-    files
-    |> Stream.map(fn {filename, bin} -> {List.to_string(filename), bin} end)
-    |> Stream.filter(fn
-      {"Makefile", _}          -> false
-      {"README", _}            -> false
-      {"leapseconds" <> _, _}  -> false
-      {"leap-seconds.list", _} -> false
-      {"yearistype.sh", _}     -> false
-      {"iso3166.tab", _}       -> false
-      {"zone1970.tab", _}      -> false
-      {"zone.tab", _}          -> false
-      {"factory", _}           -> false
-      {filename, _}            -> true
-    end)
+    extracted = :erl_tar.extract('#{path}', [{:cwd, '#{@tzdata_store}'}, :compressed, :verbose, :memory])
+    case extracted do
+      {:ok, files} ->
+        files
+        |> Stream.map(fn {filename, bin} -> {List.to_string(filename), bin} end)
+        |> Stream.filter(fn
+          {filename, _} when filename in @ignored_files ->
+            false
+          {_, _} ->
+            true
+        end)
+      {:error, reason} ->
+        error "Failed to extract tzdata package: #{reason}"
+        exit(:normal)
+    end
   end
 
   defp parse_tzdata(data) do
-    {:ok, db} = Parser.parse(data)
-    db
+    # TODO pass filename here
+    case Parser.parse(data) do
+      {:ok, db} -> db
+      {:error, reason} ->
+        error "Failed to parse tzata: #{reason}"
+        exit(:normal)
+      _ ->
+        error "Failed to parse tzdata!"
+    end
   end
 
   defp combine_parse_results(%Database{} = parse_result, %Database{} = combined) do
     Map.merge(parse_result, combined, fn 
-      (:__struct__, m1, m2) ->
+      (:__struct__, m1, _m2) ->
         m1
       (_, adding, acc) when is_list(adding) and is_list(acc) ->
         adding ++ acc 
@@ -126,12 +195,20 @@ defmodule Mix.Tasks.Tzdata.Update do
     success "Olson timezone database compiled successfully!"
   end
   defp clean_up!({:error, reason}) do
+    clean_database!
     error "Failed to compile timezone database: #{reason}"
   end
 
-  defp clean_tzdata! do
+  defp clean_tzdata!(notify? \\ false) do
     if File.exists?(@tzdata_store) do
       File.ls!(@tzdata_store) |> Enum.each(&File.rm_rf!/1)
+      if notify?, do: info("Olson tzdata package removed!")
+    end
+  end
+  defp clean_database!(notify? \\ false) do
+    if File.exists?(@tzdata_db) do
+      File.rm_rf!(@tzdata_db)
+      if notify?, do: info("Timezone database removed!")
     end
   end
 
@@ -162,7 +239,16 @@ defmodule Mix.Tasks.Tzdata.Update do
     end
   end
 
-  defp info(message),    do: IO.puts(message)
-  defp success(message), do: IO.puts(IO.ANSI.green <> message <> IO.ANSI.reset)
-  defp error(message),   do: IO.puts(IO.ANSI.red <> message <> IO.ANSI.reset)
+  defp info(message),    do: print(message)
+  defp success(message), do: print(message, IO.ANSI.green)
+  defp warn(message),    do: print(message, IO.ANSI.yellow)
+  defp error(message),   do: print(message, IO.ANSI.red)
+  defp print(message, color \\ nil) do
+    has_colors? = IO.ANSI.enabled?
+    cond do
+      color == nil -> message
+      has_colors?  -> color <> message <> IO.ANSI.reset
+      true         -> message
+    end |> IO.puts
+  end
 end
