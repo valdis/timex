@@ -15,9 +15,14 @@ defmodule Timex.Parsers.Tzdata.Database do
 
   def build!(%Zone{} = zones, %Rule{} = rules, %Leap{} = leaps, %Link{} = links) do
     db = %Database{zones: zones, rules: rules, leaps: leaps, links: links}
-    # 3. For each world region, start by iterating over zones
-    # 4. For each zone, fetch the rule which matches the zone's rule name and time boundaries
-    # 5. Define a function to fetch that zone given a date
+
+    ## RULE CHANGES (FINAL)
+    # Given a Zone, for each period, check the Rule.
+    # If the Rule is nil, there is no DST
+    # If the Rule is a time, that is the adjustment to GMT offsest for DST
+    # If the Rule is a name, then for the duration of that period, use the
+    # transitions defined by the Rules of that name, for the period of time
+    # specified by that Zone period.
     timezones = Enum.flat_map zones, fn %Zone{name: zone_name, rules: zone_rules} ->
       Stream.transform zone_rules, :min, fn
         # If the last `until` was :infinity, we're done
@@ -30,12 +35,12 @@ defmodule Timex.Parsers.Tzdata.Database do
             nil            -> construct_timezone(zone_name, {:+, {0,0,0}}, off, abbr_fmt, acc, until)
             # We have been given the offset for DST, so this is a DST zone
             {_,_,_} = time -> construct_timezone(zone_name, {:+, time}, off, abbr_fmt, acc, until)
-            # We have been given the name of a rule to check to verify DST, so we need to
-            # lookup the rule, and first make sure the zone falls within the rule's start and end
-            # dates ({type, date, time}), and secondly, determine from the rule whether this is
-            # a dst date or not.
+            # We have been given the name of DST transition rules to use for this zone, so fetch
+            # all rules with this name, and grab the set which occurs between the last zone's `until`
+            # and the current zone's `until`, which defines the range of time those transition rules
+            # are in effect. For each one, we need to create a unique zone.
             rule_name      ->
-              case Enum.find(rules, &locate_rule(&1, acc, until)) do
+              case Enum.filter(rules, &locate_rule(&1, acc, until)) do
                 %Rule{save: dst_offset, abbreviation_variable: var} ->
                   abbr = case abbr_fmt do
                     {pre, post}  -> pre <> var <> post
@@ -43,7 +48,8 @@ defmodule Timex.Parsers.Tzdata.Database do
                   end
                   is_dst? = rule.save != {:+, {0,0,0}}
                   construct_timezone(zone_name, rule.save, off, abbr, acc, until, is_dst?)
-                nil ->
+                [] ->
+                  raise RuntimeError, message: "Zone #{zone_name} expects transition rules from #{rule_name}, but no transition rules were found."
                   construct_timezone(zone_name, {:+, {0,0,0}}, off, abbr_fmt, acc, until, false)
               end
           end
@@ -55,14 +61,6 @@ defmodule Timex.Parsers.Tzdata.Database do
   ## TODO
   # Utils.compare_until
   # Utils.shift_offset
-
-  ## RULE CHANGES (FINAL)
-  # Given a Zone, for each period, check the Rule.
-  # If the Rule is nil, there is no DST
-  # If the Rule is a time, that is the adjustment to GMT offsest for DST
-  # If the Rule is a name, then for the duration of that period, use the
-  # transitions defined by the Rules of that name, for the period of time
-  # specified by that Zone period.
 
   defp construct_timezone(name, _, offset, abbr, starts, until, false) do
     TimezoneInfo.new(name, abbr, offset, starts, until, is_dst?) do
