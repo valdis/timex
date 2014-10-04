@@ -41,6 +41,8 @@ defmodule Timex.Parsers.Tzdata.Database do
             # are in effect. For each one, we need to create a unique zone.
             rule_name      ->
               case Enum.filter(rules, &locate_rule(&1, acc, until)) do
+                [%Rule{}|_] = transitions ->
+                  map_transitions(transitions, zone_name, off, abbr_fmt, until)
                 %Rule{save: dst_offset, abbreviation_variable: var} ->
                   abbr = case abbr_fmt do
                     {pre, post}  -> pre <> var <> post
@@ -50,12 +52,23 @@ defmodule Timex.Parsers.Tzdata.Database do
                   construct_timezone(zone_name, rule.save, off, abbr, acc, until, is_dst?)
                 [] ->
                   raise RuntimeError, message: "Zone #{zone_name} expects transition rules from #{rule_name}, but no transition rules were found."
-                  construct_timezone(zone_name, {:+, {0,0,0}}, off, abbr_fmt, acc, until, false)
               end
           end
           {[timezone], timezone.until}
       end
     end
+  end
+
+  defp map_transitions(transitions, zone_name, offset, abbr_fmt, until),
+    do: map_transitions(transitions, zone_name, offset, abbr_fmt, until, [])
+  defp map_transitions([], _, _, _, _, acc), do: acc
+  defp map_transitions([%Rule{save: dst_offset, abbreviation_variable: var}|rest], zone_name, offset, abbr_fmt, until, acc) do
+    abbr = case abbr_fmt do
+      {pre, post}  -> pre <> var <> post
+      abbreviation -> abbreviation
+    end
+    is_dst? = dst_offset != {:+, {0, 0, 0}}
+    construct_timezone(zone_name, dst_offset, offset, abbr, acc)
   end
 
   ## TODO
