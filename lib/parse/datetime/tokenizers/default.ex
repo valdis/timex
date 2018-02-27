@@ -93,10 +93,12 @@ defmodule Timex.Parse.DateTime.Tokenizers.Default do
       "WYY"   -> force_width(2, :iso_year2, directive, opts)
       # Months
       "M"      -> set_width(1, 2, :month, directive, opts)
+      "MM"     -> force_width(2, :month, directive, opts)
       "Mfull"  -> Directive.get(:mfull, directive, opts)
       "Mshort" -> Directive.get(:mshort, directive, opts)
       # Days
       "D"    -> set_width(1, 2, :day, directive, opts)
+      "DD"   -> force_width(2, :day, directive, opts)
       "Dord" -> set_width(1, 3, :oday, directive, opts)
       # Weeks
       "Wiso"    -> force_width(2, :iso_weeknum, directive, opts)
